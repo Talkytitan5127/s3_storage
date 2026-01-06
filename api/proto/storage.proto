@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package storage;
+option go_package = "github.com/s3storage/api/proto";
+
+// StorageService defines the gRPC service for chunk storage operations
+service StorageService {
+  // PutChunk stores a chunk on the storage server using streaming
+  rpc PutChunk(stream PutChunkRequest) returns (PutChunkResponse);
+  
+  // GetChunk retrieves a chunk from the storage server using streaming
+  rpc GetChunk(GetChunkRequest) returns (stream GetChunkResponse);
+  
+  // DeleteChunk removes a chunk from the storage server
+  rpc DeleteChunk(DeleteChunkRequest) returns (DeleteChunkResponse);
+  
+  // HealthCheck returns the health status of the storage server
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// PutChunkRequest represents a request to store a chunk
+message PutChunkRequest {
+  string chunk_id = 1;
+  bytes data = 2;
+  string checksum = 3;
+}
+
+// PutChunkResponse represents the response after storing a chunk
+message PutChunkResponse {
+  string chunk_id = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+// GetChunkRequest represents a request to retrieve a chunk
+message GetChunkRequest {
+  string chunk_id = 1;
+}
+
+// GetChunkResponse represents the response containing chunk data
+message GetChunkResponse {
+  bytes data = 1;
+}
+
+// DeleteChunkRequest represents a request to delete a chunk
+message DeleteChunkRequest {
+  string chunk_id = 1;
+}
+
+// DeleteChunkResponse represents the response after deleting a chunk
+message DeleteChunkResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+// HealthCheckRequest represents a health check request
+message HealthCheckRequest {}
+
+// HealthCheckResponse represents the health status of the storage server
+message HealthCheckResponse {
+  string status = 1;
+  int64 available_space = 2;
+  int64 used_space = 3;
+  int64 total_space = 4;
+}

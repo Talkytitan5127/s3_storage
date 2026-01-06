@@ -1,0 +1,177 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: s3storage_postgres
+    environment:
+      POSTGRES_DB: s3storage
+      POSTGRES_USER: s3user
+      POSTGRES_PASSWORD: s3password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3user -d s3storage"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - s3storage_network
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: cmd/api-gateway/Dockerfile
+    container_name: s3storage_api_gateway
+    environment:
+      HTTP_PORT: "8080"
+      DATABASE_URL: "postgres://s3user:s3password@postgres:5432/s3storage?sslmode=disable"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - s3storage_network
+
+  storage-1:
+    build:
+      context: .
+      dockerfile: cmd/storage-server/Dockerfile
+    container_name: s3storage_server_1
+    environment:
+      SERVER_ID: "storage-1"
+      GRPC_PORT: "50051"
+      DATA_DIR: "/data"
+      DATABASE_URL: "postgres://s3user:s3password@postgres:5432/s3storage?sslmode=disable"
+    ports:
+      - "50051:50051"
+    volumes:
+      - storage_1_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - s3storage_network
+
+  storage-2:
+    build:
+      context: .
+      dockerfile: cmd/storage-server/Dockerfile
+    container_name: s3storage_server_2
+    environment:
+      SERVER_ID: "storage-2"
+      GRPC_PORT: "50052"
+      DATA_DIR: "/data"
+      DATABASE_URL: "postgres://s3user:s3password@postgres:5432/s3storage?sslmode=disable"
+    ports:
+      - "50052:50052"
+    volumes:
+      - storage_2_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - s3storage_network
+
+  storage-3:
+    build:
+      context: .
+      dockerfile: cmd/storage-server/Dockerfile
+    container_name: s3storage_server_3
+    environment:
+      SERVER_ID: "storage-3"
+      GRPC_PORT: "50053"
+      DATA_DIR: "/data"
+      DATABASE_URL: "postgres://s3user:s3password@postgres:5432/s3storage?sslmode=disable"
+    ports:
+      - "50053:50053"
+    volumes:
+      - storage_3_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - s3storage_network
+
+  storage-4:
+    build:
+      context: .
+      dockerfile: cmd/storage-server/Dockerfile
+    container_name: s3storage_server_4
+    environment:
+      SERVER_ID: "storage-4"
+      GRPC_PORT: "50054"
+      DATA_DIR: "/data"
+      DATABASE_URL: "postgres://s3user:s3password@postgres:5432/s3storage?sslmode=disable"
+    ports:
+      - "50054:50054"
+    volumes:
+      - storage_4_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - s3storage_network
+
+  storage-5:
+    build:
+      context: .
+      dockerfile: cmd/storage-server/Dockerfile
+    container_name: s3storage_server_5
+    environment:
+      SERVER_ID: "storage-5"
+      GRPC_PORT: "50055"
+      DATA_DIR: "/data"
+      DATABASE_URL: "postgres://s3user:s3password@postgres:5432/s3storage?sslmode=disable"
+    ports:
+      - "50055:50055"
+    volumes:
+      - storage_5_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - s3storage_network
+
+  storage-6:
+    build:
+      context: .
+      dockerfile: cmd/storage-server/Dockerfile
+    container_name: s3storage_server_6
+    environment:
+      SERVER_ID: "storage-6"
+      GRPC_PORT: "50056"
+      DATA_DIR: "/data"
+      DATABASE_URL: "postgres://s3user:s3password@postgres:5432/s3storage?sslmode=disable"
+    ports:
+      - "50056:50056"
+    volumes:
+      - storage_6_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - s3storage_network
+
+networks:
+  s3storage_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  storage_1_data:
+  storage_2_data:
+  storage_3_data:
+  storage_4_data:
+  storage_5_data:
+  storage_6_data:
