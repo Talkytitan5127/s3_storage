@@ -341,7 +341,7 @@ func (s *PostgresStorage) GetChunksByFileID(ctx context.Context, fileID uuid.UUI
 	return chunks, nil
 }
 
-// CreateStorageServer creates a new storage server record
+// CreateStorageServer creates a new storage server record or updates if address exists
 func (s *PostgresStorage) CreateStorageServer(ctx context.Context, server *StorageServer) error {
 	if server.ServerID == uuid.Nil {
 		server.ServerID = uuid.New()
@@ -350,7 +350,14 @@ func (s *PostgresStorage) CreateStorageServer(ctx context.Context, server *Stora
 	query := `
 		INSERT INTO storage_servers (server_id, grpc_address, status, available_space, used_space)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING created_at, updated_at, last_heartbeat
+		ON CONFLICT (grpc_address)
+		DO UPDATE SET
+			status = EXCLUDED.status,
+			available_space = EXCLUDED.available_space,
+			used_space = EXCLUDED.used_space,
+			last_heartbeat = NOW(),
+			updated_at = NOW()
+		RETURNING server_id, created_at, updated_at, last_heartbeat
 	`
 
 	err := s.pool.QueryRow(ctx, query,
@@ -359,7 +366,7 @@ func (s *PostgresStorage) CreateStorageServer(ctx context.Context, server *Stora
 		"active",
 		server.AvailableSpace,
 		server.UsedSpace,
-	).Scan(&server.CreatedAt, &server.UpdatedAt, &server.LastHeartbeat)
+	).Scan(&server.ServerID, &server.CreatedAt, &server.UpdatedAt, &server.LastHeartbeat)
 
 	if err != nil {
 		return fmt.Errorf("failed to create storage server: %w", err)
@@ -369,7 +376,7 @@ func (s *PostgresStorage) CreateStorageServer(ctx context.Context, server *Stora
 	return nil
 }
 
-// CreateStorageServerInTx creates a storage server within a transaction
+// CreateStorageServerInTx creates a storage server within a transaction or updates if address exists
 func (s *PostgresStorage) CreateStorageServerInTx(ctx context.Context, tx pgx.Tx, server *StorageServer) error {
 	if server.ServerID == uuid.Nil {
 		server.ServerID = uuid.New()
@@ -378,7 +385,14 @@ func (s *PostgresStorage) CreateStorageServerInTx(ctx context.Context, tx pgx.Tx
 	query := `
 		INSERT INTO storage_servers (server_id, grpc_address, status, available_space, used_space)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING created_at, updated_at, last_heartbeat
+		ON CONFLICT (grpc_address)
+		DO UPDATE SET
+			status = EXCLUDED.status,
+			available_space = EXCLUDED.available_space,
+			used_space = EXCLUDED.used_space,
+			last_heartbeat = NOW(),
+			updated_at = NOW()
+		RETURNING server_id, created_at, updated_at, last_heartbeat
 	`
 
 	err := tx.QueryRow(ctx, query,
@@ -387,7 +401,7 @@ func (s *PostgresStorage) CreateStorageServerInTx(ctx context.Context, tx pgx.Tx
 		"active",
 		server.AvailableSpace,
 		server.UsedSpace,
-	).Scan(&server.CreatedAt, &server.UpdatedAt, &server.LastHeartbeat)
+	).Scan(&server.ServerID, &server.CreatedAt, &server.UpdatedAt, &server.LastHeartbeat)
 
 	if err != nil {
 		return fmt.Errorf("failed to create storage server in transaction: %w", err)
@@ -399,6 +413,14 @@ func (s *PostgresStorage) CreateStorageServerInTx(ctx context.Context, tx pgx.Tx
 
 // CreateHashRingNodes creates virtual nodes for consistent hashing
 func (s *PostgresStorage) CreateHashRingNodes(ctx context.Context, serverID uuid.UUID, count int) error {
+	// First, delete any existing hash ring nodes for this server
+	// This handles the case where a server is restarting with the same ID
+	deleteQuery := `DELETE FROM hash_ring_nodes WHERE server_id = $1`
+	_, err := s.pool.Exec(ctx, deleteQuery, serverID)
+	if err != nil {
+		return fmt.Errorf("failed to delete existing hash ring nodes: %w", err)
+	}
+
 	batch := &pgx.Batch{}
 	query := `
 		INSERT INTO hash_ring_nodes (server_id, virtual_node_index, hash_value)

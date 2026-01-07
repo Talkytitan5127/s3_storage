@@ -60,7 +60,13 @@ func main() {
 
 	// Register storage server in database
 	serverUUID := uuid.New()
-	address := fmt.Sprintf("storage-server:%s", grpcPort)
+	// Use the container hostname which matches the service name in docker-compose
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("Failed to get hostname: %v", err)
+	}
+	address := fmt.Sprintf("%s:%s", hostname, grpcPort)
+	log.Printf("Registering storage server with address: %s", address)
 
 	storageServerRecord := &storage.StorageServer{
 		ServerID:       serverUUID,
@@ -72,6 +78,8 @@ func main() {
 	if err := store.CreateStorageServer(ctx, storageServerRecord); err != nil {
 		log.Fatalf("Failed to register storage server: %v", err)
 	}
+	// Use the server_id returned from the database (may differ if there was a conflict)
+	serverUUID = storageServerRecord.ServerID
 	log.Printf("Storage server registered with UUID: %s", serverUUID)
 
 	// Create virtual nodes for consistent hashing

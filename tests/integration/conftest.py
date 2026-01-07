@@ -1,58 +1,27 @@
 """
 Pytest configuration and fixtures for integration tests.
+
+NOTE: This assumes infrastructure (Docker Compose services) is already running.
+Start services before running tests with:
+    docker compose -f docker-compose.test.yml up -d --build
 """
 import os
 import time
 import pytest
 import requests
-import subprocess
 from typing import Generator, Dict, Any
 from pathlib import Path
 
 
 # Test configuration
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8080")
-DOCKER_COMPOSE_FILE = "docker-compose.test.yml"
 TEST_DATA_DIR = Path(__file__).parent / "test_data"
-
-
-@pytest.fixture(scope="session")
-def docker_services() -> Generator[None, None, None]:
-    """
-    Start Docker Compose services before tests and stop them after.
-    """
-    project_root = Path(__file__).parent.parent.parent
-    compose_file = project_root / DOCKER_COMPOSE_FILE
-    
-    if not compose_file.exists():
-        pytest.skip(f"Docker Compose file not found: {compose_file}")
-    
-    # Start services
-    print("\n🚀 Starting Docker Compose services...")
-    subprocess.run(
-        ["docker-compose", "-f", str(compose_file), "up", "-d", "--build"],
-        cwd=project_root,
-        check=True
-    )
-    
-    # Wait for services to be ready
-    print("⏳ Waiting for services to be ready...")
-    wait_for_api_ready(max_attempts=30, delay=2)
-    
-    yield
-    
-    # Stop services
-    print("\n🛑 Stopping Docker Compose services...")
-    subprocess.run(
-        ["docker-compose", "-f", str(compose_file), "down", "-v"],
-        cwd=project_root,
-        check=False
-    )
 
 
 def wait_for_api_ready(max_attempts: int = 30, delay: int = 2) -> None:
     """
     Wait for API Gateway to be ready.
+    Raises RuntimeError if API is not available.
     """
     health_url = f"{API_BASE_URL}/health"
     
@@ -68,14 +37,21 @@ def wait_for_api_ready(max_attempts: int = 30, delay: int = 2) -> None:
         if attempt < max_attempts - 1:
             time.sleep(delay)
     
-    raise RuntimeError(f"API Gateway did not become ready after {max_attempts} attempts")
+    raise RuntimeError(
+        f"API Gateway did not become ready after {max_attempts} attempts. "
+        f"Please ensure infrastructure is running: docker compose -f docker-compose.test.yml up -d"
+    )
 
 
 @pytest.fixture(scope="session")
-def api_client(docker_services) -> Dict[str, Any]:
+def api_client() -> Dict[str, Any]:
     """
     Provide API client configuration.
+    Verifies that API is available before running tests.
     """
+    print("\n🔍 Checking if API Gateway is available...")
+    wait_for_api_ready(max_attempts=10, delay=1)
+    
     return {
         "base_url": API_BASE_URL,
         "timeout": 300,  # 5 minutes for large file operations
@@ -112,6 +88,40 @@ def cleanup_files(api_client) -> Generator[list, None, None]:
                 print(f"🗑️  Cleaned up file: {file_id}")
         except Exception as e:
             print(f"⚠️  Failed to cleanup file {file_id}: {e}")
+
+
+@pytest.fixture(scope="session")
+def api_url() -> str:
+    """
+    Provide API base URL for tests that use api_url fixture.
+    """
+    return API_BASE_URL
+
+
+@pytest.fixture(scope="session")
+def db_connection():
+    """
+    Provide database connection for tests that need direct DB access.
+    Assumes PostgreSQL is running and accessible.
+    """
+    import psycopg2
+    
+    # Database configuration from environment or defaults
+    db_config = {
+        "host": os.getenv("DB_HOST", "localhost"),
+        "port": int(os.getenv("DB_PORT", "5432")),
+        "database": os.getenv("DB_NAME", "s3_storage"),
+        "user": os.getenv("DB_USER", "postgres"),
+        "password": os.getenv("DB_PASSWORD", "postgres")
+    }
+    
+    try:
+        conn = psycopg2.connect(**db_config)
+        conn.autocommit = False
+        yield conn
+        conn.close()
+    except psycopg2.Error as e:
+        pytest.skip(f"Database connection failed: {e}. Ensure PostgreSQL is running.")
 
 
 def pytest_configure(config):

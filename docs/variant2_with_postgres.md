@@ -1,9 +1,9 @@
 
-# Вариант 2: Распределенная архитектура с PostgreSQL и Consistent Hashing
+# Variant 2: Distributed Architecture with PostgreSQL and Consistent Hashing
 
-## Обзор
+## Overview
 
-Данный вариант представляет собой адаптацию Варианта 2 (распределенная архитектура с Consistent Hashing), где вместо Redis используется PostgreSQL для хранения метаданных. Это решение сочетает преимущества распределенной архитектуры с надежностью реляционной базы данных.
+This variant is an adaptation of Variant 2 (distributed architecture with Consistent Hashing), where PostgreSQL is used instead of Redis for storing metadata. This solution combines the advantages of distributed architecture with the reliability of a relational database.
 
 ## C4 Level 1: System Context Diagram
 
@@ -18,7 +18,7 @@ graph TB
     style User fill:#08427b,stroke:#052e56,color:#ffffff
 ```
 
-**Описание:** Пользователь взаимодействует с системой хранения через REST API для загрузки и скачивания файлов размером до 10 GiB.
+**Description:** User interacts with the storage system through REST API for uploading and downloading files up to 10 GiB in size.
 
 ## C4 Level 2: Container Diagram
 
@@ -66,41 +66,41 @@ graph TB
     style Storage6 fill:#ff6b6b,stroke:#c92a2a,color:#ffffff
 ```
 
-## Архитектурные компоненты
+## Architectural Components
 
 ### 1. API Gateway Server (Go)
 
-**Технологии:** Go 1.21+, Gin Framework, gRPC client
+**Technologies:** Go 1.21+, Gin Framework, gRPC client
 
-**Ответственность:**
+**Responsibilities:**
 - REST API endpoints: `POST /files`, `GET /files/{id}`, `DELETE /files/{id}`
-- Chunking logic: разделение файла на 6 равных частей
-- **Consistent Hashing** для детерминированного распределения chunks
-- Streaming upload/download для файлов до 10 GiB
-- Координация с PostgreSQL для метаданных
-- Retry logic при сбоях storage серверов
-- Обработка прерванных загрузок
+- Chunking logic: splitting file into 6 equal parts
+- **Consistent Hashing** for deterministic chunk distribution
+- Streaming upload/download for files up to 10 GiB
+- Coordination with PostgreSQL for metadata
+- Retry logic on storage server failures
+- Interrupted upload handling
 
-**Ключевые особенности:**
-- In-memory кеширование consistent hash ring для производительности
-- Connection pooling к PostgreSQL
-- gRPC connection pool к storage серверам
-- Graceful shutdown с завершением активных загрузок
+**Key Features:**
+- In-memory caching of consistent hash ring for performance
+- Connection pooling to PostgreSQL
+- gRPC connection pool to storage servers
+- Graceful shutdown with completion of active uploads
 
 ### 2. PostgreSQL Database
 
-**Версия:** PostgreSQL 15+
+**Version:** PostgreSQL 15+
 
-**Ответственность:**
-- Хранение метаданных файлов
-- Координация состояния storage серверов
-- Управление незавершенными загрузками
-- ACID транзакции для консистентности
+**Responsibilities:**
+- Storing file metadata
+- Coordinating storage server state
+- Managing incomplete uploads
+- ACID transactions for consistency
 
-**Схема базы данных:**
+**Database Schema:**
 
 ```sql
--- Таблица файлов
+-- Files table
 CREATE TABLE files (
     file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename VARCHAR(255) NOT NULL,
@@ -114,13 +114,13 @@ CREATE TABLE files (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     completed_at TIMESTAMP WITH TIME ZONE,
     checksum VARCHAR(64), -- SHA-256 hash
-    metadata JSONB -- дополнительные метаданные
+    metadata JSONB -- additional metadata
 );
 
 CREATE INDEX idx_files_status ON files(upload_status);
 CREATE INDEX idx_files_created ON files(created_at DESC);
 
--- Таблица chunks
+-- Chunks table
 CREATE TABLE chunks (
     chunk_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     file_id UUID NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
@@ -138,7 +138,7 @@ CREATE INDEX idx_chunks_file ON chunks(file_id);
 CREATE INDEX idx_chunks_server ON chunks(storage_server_id);
 CREATE INDEX idx_chunks_status ON chunks(upload_status);
 
--- Таблица storage серверов
+-- Storage servers table
 CREATE TABLE storage_servers (
     server_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     host VARCHAR(255) NOT NULL,
@@ -158,7 +158,7 @@ CREATE TABLE storage_servers (
 CREATE INDEX idx_servers_status ON storage_servers(status);
 CREATE INDEX idx_servers_heartbeat ON storage_servers(last_heartbeat DESC);
 
--- Таблица для consistent hash ring (виртуальные узлы)
+-- Table for consistent hash ring (virtual nodes)
 CREATE TABLE hash_ring_nodes (
     node_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     server_id UUID NOT NULL REFERENCES storage_servers(server_id) ON DELETE CASCADE,
@@ -170,7 +170,7 @@ CREATE TABLE hash_ring_nodes (
 
 CREATE INDEX idx_hash_ring_value ON hash_ring_nodes(hash_value);
 
--- Таблица для отслеживания незавершенных загрузок
+-- Table for tracking incomplete uploads
 CREATE TABLE upload_sessions (
     session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     file_id UUID NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
@@ -186,22 +186,22 @@ CREATE INDEX idx_upload_sessions_file ON upload_sessions(file_id);
 CREATE INDEX idx_upload_sessions_expires ON upload_sessions(expires_at);
 ```
 
-**Оптимизации:**
-- Партиционирование таблицы `chunks` по `file_id` для больших объемов
-- Материализованные представления для статистики
-- Connection pooling (pgBouncer опционально)
-- Регулярная очистка старых незавершенных загрузок
+**Optimizations:**
+- Partitioning `chunks` table by `file_id` for large volumes
+- Materialized views for statistics
+- Connection pooling (pgBouncer optional)
+- Regular cleanup of old incomplete uploads
 
 ### 3. Storage Servers (Go + gRPC)
 
-**Технологии:** Go 1.21+, gRPC, Protocol Buffers
+**Technologies:** Go 1.21+, gRPC, Protocol Buffers
 
-**Ответственность:**
-- gRPC сервер с streaming support
-- Локальное хранение chunks на диске
-- Heartbeat в PostgreSQL для health monitoring
-- Самостоятельная регистрация при старте
-- Управление дисковым пространством
+**Responsibilities:**
+- gRPC server with streaming support
+- Local chunk storage on disk
+- Heartbeat to PostgreSQL for health monitoring
+- Self-registration on startup
+- Disk space management
 
 **gRPC API (protobuf):**
 
@@ -211,19 +211,19 @@ syntax = "proto3";
 package storage;
 
 service StorageService {
-    // Загрузка chunk с streaming
+    // Upload chunk with streaming
     rpc PutChunk(stream ChunkData) returns (PutChunkResponse);
     
-    // Скачивание chunk с streaming
+    // Download chunk with streaming
     rpc GetChunk(GetChunkRequest) returns (stream ChunkData);
     
-    // Удаление chunk
+    // Delete chunk
     rpc DeleteChunk(DeleteChunkRequest) returns (DeleteChunkResponse);
     
     // Health check
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
     
-    // Получение статистики сервера
+    // Get server statistics
     rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
 }
 
@@ -272,61 +272,61 @@ message GetStatsResponse {
 }
 ```
 
-**Хранение на диске:**
-- Структура: `/data/chunks/{chunk_id}`
-- Atomic writes с временными файлами
-- Периодическая проверка целостности
+**Disk Storage:**
+- Structure: `/data/chunks/{chunk_id}`
+- Atomic writes with temporary files
+- Periodic integrity checks
 - Cleanup orphaned chunks
 
 ## Consistent Hashing Implementation
 
-### Алгоритм
+### Algorithm
 
-**Consistent Hashing** используется для детерминированного распределения chunks по storage серверам с минимальным перераспределением при добавлении новых серверов.
+**Consistent Hashing** is used for deterministic chunk distribution across storage servers with minimal redistribution when adding new servers.
 
-**Ключевые параметры:**
-- Количество виртуальных узлов на сервер: 150
-- Hash функция: xxHash (быстрая и качественная)
+**Key Parameters:**
+- Number of virtual nodes per server: 150
+- Hash function: xxHash (fast and high-quality)
 - Ring size: 2^32 (uint32)
 
-**Процесс распределения:**
+**Distribution Process:**
 
-1. **Инициализация ring:**
+1. **Ring Initialization:**
    ```
-   Для каждого storage сервера:
-     Для i от 0 до 149:
+   For each storage server:
+     For i from 0 to 149:
        virtual_key = server_id + "#" + i
        hash_value = xxHash(virtual_key)
-       Добавить (hash_value, server_id) в ring
-   Сортировать ring по hash_value
+       Add (hash_value, server_id) to ring
+   Sort ring by hash_value
    ```
 
-2. **Размещение chunk:**
+2. **Chunk Placement:**
    ```
    chunk_key = file_id + "#" + chunk_number
    chunk_hash = xxHash(chunk_key)
    
-   Найти первый узел в ring где hash_value >= chunk_hash
-   Если не найден, взять первый узел в ring
-   Вернуть server_id этого узла
+   Find first node in ring where hash_value >= chunk_hash
+   If not found, take first node in ring
+   Return server_id of this node
    ```
 
-3. **Добавление нового сервера:**
+3. **Adding New Server:**
    ```
-   Создать 150 виртуальных узлов для нового сервера
-   Вставить их в ring с сохранением сортировки
-   Обновить кеш в API Gateway
+   Create 150 virtual nodes for new server
+   Insert them into ring maintaining sort order
+   Update cache in API Gateway
    ```
 
-**Преимущества:**
-- Детерминированное распределение (один и тот же chunk всегда на одном сервере)
-- Минимальное перераспределение при добавлении серверов (~1/N chunks)
-- Равномерное распределение благодаря виртуальным узлам
-- Быстрый поиск O(log N)
+**Advantages:**
+- Deterministic distribution (same chunk always on same server)
+- Minimal redistribution when adding servers (~1/N chunks)
+- Uniform distribution thanks to virtual nodes
+- Fast lookup O(log N)
 
-### Кеширование Ring в API Gateway
+### Ring Caching in API Gateway
 
-API Gateway кеширует hash ring в памяти для производительности:
+API Gateway caches hash ring in memory for performance:
 
 ```go
 type HashRing struct {
@@ -342,13 +342,13 @@ type HashNode struct {
 }
 ```
 
-**Обновление кеша:**
-- При старте API Gateway
-- Периодически каждые 30 секунд
-- При получении уведомления о новом сервере
-- При обнаружении недоступного сервера
+**Cache Updates:**
+- On API Gateway startup
+- Periodically every 30 seconds
+- On notification of new server
+- On detection of unavailable server
 
-## Workflow диаграммы
+## Workflow Diagrams
 
 ### Upload File Flow
 
@@ -482,87 +482,87 @@ sequenceDiagram
     end
 ```
 
-## Преимущества варианта с PostgreSQL
+## Advantages of PostgreSQL Variant
 
-### ✅ Надежность и консистентность
-- **ACID транзакции**: Гарантированная консистентность метаданных
-- **Durability**: Данные не теряются при сбоях (в отличие от Redis)
-- **Strong consistency**: Соответствует требованиям MVP
-- **Referential integrity**: Foreign keys обеспечивают целостность данных
+### ✅ Reliability and Consistency
+- **ACID transactions**: Guaranteed metadata consistency
+- **Durability**: Data not lost on failures (unlike Redis)
+- **Strong consistency**: Meets MVP requirements
+- **Referential integrity**: Foreign keys ensure data integrity
 
-### ✅ Производительность
-- **Consistent Hashing**: Быстрое O(log N) определение storage сервера
-- **In-memory кеш ring**: Минимальные обращения к БД для размещения
-- **Connection pooling**: Эффективное использование соединений
-- **Индексы**: Быстрые запросы по всем критическим полям
-- **gRPC streaming**: Эффективная передача больших файлов
+### ✅ Performance
+- **Consistent Hashing**: Fast O(log N) storage server determination
+- **In-memory ring cache**: Minimal DB queries for placement
+- **Connection pooling**: Efficient connection usage
+- **Indexes**: Fast queries on all critical fields
+- **gRPC streaming**: Efficient large file transfer
 
-### ✅ Масштабируемость
-- **Динамическое добавление серверов**: Consistent hashing минимизирует перераспределение
-- **Равномерное распределение**: Виртуальные узлы обеспечивают баланс
-- **Партиционирование**: PostgreSQL поддерживает партиционирование таблиц
-- **Read replicas**: Можно добавить для масштабирования чтения
+### ✅ Scalability
+- **Dynamic server addition**: Consistent hashing minimizes redistribution
+- **Uniform distribution**: Virtual nodes ensure balance
+- **Partitioning**: PostgreSQL supports table partitioning
+- **Read replicas**: Can be added for read scaling
 
-### ✅ Операционные преимущества
-- **Простота backup**: Стандартные инструменты PostgreSQL
-- **Мониторинг**: Богатая экосистема инструментов
-- **Debugging**: SQL запросы легко отлаживать
-- **Миграции**: Управление схемой через migrations
-- **Аудит**: Легко добавить audit log
+### ✅ Operational Advantages
+- **Backup simplicity**: Standard PostgreSQL tools
+- **Monitoring**: Rich ecosystem of tools
+- **Debugging**: SQL queries easy to debug
+- **Migrations**: Schema management through migrations
+- **Audit**: Easy to add audit log
 
-### ✅ Функциональность
-- **Сложные запросы**: SQL позволяет делать аналитику
-- **JSONB**: Гибкое хранение дополнительных метаданных
-- **Triggers**: Автоматизация бизнес-логики
-- **Full-text search**: Поиск по файлам (опционально)
+### ✅ Functionality
+- **Complex queries**: SQL enables analytics
+- **JSONB**: Flexible storage of additional metadata
+- **Triggers**: Business logic automation
+- **Full-text search**: File search (optional)
 
-## Недостатки и митигация
+## Disadvantages and Mitigation
 
-### ⚠️ Latency БД запросов
-**Проблема:** PostgreSQL медленнее Redis для простых операций
+### ⚠️ DB Query Latency
+**Problem:** PostgreSQL slower than Redis for simple operations
 
-**Митигация:**
-- In-memory кеш hash ring в API Gateway
-- Connection pooling для минимизации overhead
-- Batch операции где возможно
-- Prepared statements для часто используемых запросов
-- Индексы на всех критических полях
+**Mitigation:**
+- In-memory hash ring cache in API Gateway
+- Connection pooling to minimize overhead
+- Batch operations where possible
+- Prepared statements for frequently used queries
+- Indexes on all critical fields
 
 ### ⚠️ Single Point of Failure
-**Проблема:** PostgreSQL - единственная точка отказа
+**Problem:** PostgreSQL is single point of failure
 
-**Митигация:**
+**Mitigation:**
 - PostgreSQL replication (streaming replication)
-- Automatic failover с Patroni/Stolon
+- Automatic failover with Patroni/Stolon
 - Regular backups (pg_dump, WAL archiving)
-- Health checks и мониторинг
+- Health checks and monitoring
 
-### ⚠️ Масштабирование записи
-**Проблема:** Один master для записи
+### ⚠️ Write Scaling
+**Problem:** Single master for writes
 
-**Митигация:**
-- Оптимизация транзакций (короткие, эффективные)
-- Batch inserts для chunks
-- Асинхронные операции где возможно
-- Партиционирование таблиц при росте
+**Mitigation:**
+- Transaction optimization (short, efficient)
+- Batch inserts for chunks
+- Asynchronous operations where possible
+- Table partitioning as data grows
 
-## Сравнение с Redis вариантом
+## Comparison with Redis Variant
 
-| Критерий | PostgreSQL | Redis |
+| Criterion | PostgreSQL | Redis |
 |----------|-----------|-------|
-| **Durability** | ⭐⭐⭐⭐⭐ Отличная | ⭐⭐⭐ Средняя (даже с AOF) |
+| **Durability** | ⭐⭐⭐⭐⭐ Excellent | ⭐⭐⭐ Medium (even with AOF) |
 | **Consistency** | ⭐⭐⭐⭐⭐ ACID | ⭐⭐⭐ Eventual (cluster) |
 | **Latency** | ⭐⭐⭐ ~1-5ms | ⭐⭐⭐⭐⭐ <1ms |
-| **Сложность запросов** | ⭐⭐⭐⭐⭐ SQL | ⭐⭐ Ограничена |
-| **Backup/Recovery** | ⭐⭐⭐⭐⭐ Зрелые инструменты | ⭐⭐⭐ RDB/AOF |
-| **Operational сложность** | ⭐⭐⭐ Средняя | ⭐⭐⭐ Средняя |
-| **Память** | ⭐⭐⭐⭐ Эффективная | ⭐⭐ Требует много RAM |
-| **Масштабирование** | ⭐⭐⭐ Вертикальное + replicas | ⭐⭐⭐⭐ Горизонтальное (cluster) |
+| **Query Complexity** | ⭐⭐⭐⭐⭐ SQL | ⭐⭐ Limited |
+| **Backup/Recovery** | ⭐⭐⭐⭐⭐ Mature tools | ⭐⭐⭐ RDB/AOF |
+| **Operational Complexity** | ⭐⭐⭐ Medium | ⭐⭐⭐ Medium |
+| **Memory** | ⭐⭐⭐⭐ Efficient | ⭐⭐ Requires lots of RAM |
+| **Scaling** | ⭐⭐⭐ Vertical + replicas | ⭐⭐⭐⭐ Horizontal (cluster) |
 
-## Технический стек
+## Technology Stack
 
 ### API Gateway
-- **Язык:** Go 1.21+
+- **Language:** Go 1.21+
 - **Framework:** Gin (REST API)
 - **gRPC:** google.golang.org/grpc
 - **PostgreSQL driver:** pgx v5
@@ -571,15 +571,15 @@ sequenceDiagram
 - **Metrics:** Prometheus client
 
 ### Storage Server
-- **Язык:** Go 1.21+
+- **Language:** Go 1.21+
 - **gRPC:** google.golang.org/grpc
-- **PostgreSQL driver:** pgx v5 (для heartbeat)
-- **File I/O:** os package с atomic writes
+- **PostgreSQL driver:** pgx v5 (for heartbeat)
+- **File I/O:** os package with atomic writes
 - **Logging:** zerolog
 
 ### Database
 - **PostgreSQL:** 15+
-- **Connection pooling:** pgBouncer (опционально)
+- **Connection pooling:** pgBouncer (optional)
 - **Monitoring:** pg_stat_statements, pgAdmin
 
 ### Infrastructure
@@ -587,7 +587,7 @@ sequenceDiagram
 - **Orchestration:** Docker Compose
 - **Networking:** Docker bridge network
 
-## Конфигурация
+## Configuration
 
 ### API Gateway (config.yaml)
 ```yaml
@@ -643,23 +643,23 @@ storage:
   cleanup_orphaned_interval: 3600s # 1 hour
 ```
 
-## Мониторинг и метрики
+## Monitoring and Metrics
 
-### Ключевые метрики
+### Key Metrics
 
 **API Gateway:**
-- Количество активных загрузок/скачиваний
-- Latency операций (p50, p95, p99)
+- Active uploads/downloads count
+- Operation latency (p50, p95, p99)
 - Throughput (bytes/sec)
-- Ошибки по типам
-- Размер hash ring
+- Errors by type
+- Hash ring size
 - Database connection pool stats
 
 **Storage Servers:**
-- Доступное дисковое пространство
-- Количество chunks
+- Available disk space
+- Chunk count
 - gRPC request latency
-- Ошибки I/O операций
+- I/O operation errors
 - Heartbeat status
 
 **PostgreSQL:**
@@ -668,7 +668,7 @@ storage:
 - Transaction rate
 - Table sizes
 - Index usage
-- Replication lag (если есть)
+- Replication lag (if replicas exist)
 
 ### Health Checks
 
@@ -693,48 +693,48 @@ Response: {
 }
 ```
 
-## Безопасность
+## Security
 
-### Аутентификация и авторизация
-- API keys для клиентов
-- JWT tokens (опционально)
+### Authentication and Authorization
+- API keys for clients
+- JWT tokens (optional)
 - Rate limiting
-- IP whitelisting (опционально)
+- IP whitelisting (optional)
 
-### Защита данных
-- TLS для gRPC соединений
+### Data Protection
+- TLS for gRPC connections
 - PostgreSQL SSL connections
-- Checksums для chunks (SHA-256)
+- Checksums for chunks (SHA-256)
 - File integrity verification
 
-### Сетевая безопасность
+### Network Security
 - Docker network isolation
 - Firewall rules
-- Минимальные exposed ports
+- Minimal exposed ports
 
-## Тестирование
+## Testing
 
-### Unit тесты
-- Consistent hashing алгоритм
+### Unit Tests
+- Consistent hashing algorithm
 - Chunking logic
 - Database operations
 - gRPC handlers
 
-### Integration тесты
+### Integration Tests
 - End-to-end upload/download
-- Прерванные загрузки
-- Добавление новых storage серверов
+- Interrupted uploads
+- Adding new storage servers
 - Failover scenarios
 
-### Load тесты
+### Load Tests
 - Concurrent uploads
 - Large file handling (10 GiB)
 - Database performance
 - Storage server throughput
 
-## Развертывание
+## Deployment
 
-### Docker Compose структура
+### Docker Compose Structure
 ```yaml
 version: '3.8'
 
@@ -810,9 +810,9 @@ volumes:
   storage6_data:
 ```
 
-## Миграции базы данных
+## Database Migrations
 
-Использование golang-migrate или подобного инструмента:
+Using golang-migrate or similar tool:
 
 ```
 migrations/
@@ -822,14 +822,14 @@ migrations/
   000002_add_indexes.down.sql
 ```
 
-## Roadmap для production
+## Production Roadmap
 
-### Phase 1: MVP (текущий вариант)
-- ✅ Базовая функциональность upload/download
+### Phase 1: MVP (current variant)
+- ✅ Basic upload/download functionality
 - ✅ Consistent hashing
-- ✅ PostgreSQL для метаданных
+- ✅ PostgreSQL for metadata
 - ✅ gRPC streaming
-- ✅ Обработка прерванных загрузок
+- ✅ Interrupted upload handling
 
 ### Phase 2: Reliability
 - PostgreSQL replication (master-slave)
@@ -839,10 +839,10 @@ migrations/
 - Backup automation
 
 ### Phase 3: Performance
-- Read replicas для PostgreSQL
-- CDN integration для популярных файлов
-- Compression для chunks
-- Deduplication (опционально)
+- Read replicas for PostgreSQL
+- CDN integration for popular files
+- Chunk compression
+- Deduplication (optional)
 
 ### Phase 4: Features
 - Multipart upload API (S3-compatible)
@@ -851,6 +851,6 @@ migrations/
 - Metadata search
 - File lifecycle policies
 
-## Заключение
+## Conclusion
 
-Вариант 2 с PostgreSQL вместо Redis представляет собой оптимальное решение для production-ready S3-подобного с
+Variant 2 with PostgreSQL instead of Redis represents an optimal solution for a production-ready S3-like storage system that balances simplicity, reliability, performance, and scalability.

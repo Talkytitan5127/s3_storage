@@ -76,12 +76,13 @@ echo ""
 
 # Check if Docker Compose is running
 echo -e "${YELLOW}🔍 Checking Docker Compose services...${NC}"
-if ! docker-compose -f "$PROJECT_ROOT/docker-compose.test.yml" ps | grep -q "Up"; then
-    echo -e "${YELLOW}⚠️  Services not running. Starting Docker Compose...${NC}"
-    cd "$PROJECT_ROOT"
-    docker-compose -f docker-compose.test.yml up -d --build
-    echo -e "${YELLOW}⏳ Waiting for services to be ready (30s)...${NC}"
-    sleep 30
+if ! docker compose -f "$PROJECT_ROOT/docker-compose.test.yml" ps | grep -q "Up"; then
+    echo -e "${RED}❌ Services are not running!${NC}"
+    echo -e "${YELLOW}💡 Please start infrastructure before running tests:${NC}"
+    echo -e "   ${BLUE}cd $PROJECT_ROOT${NC}"
+    echo -e "   ${BLUE}docker compose -f docker-compose.test.yml up -d --build${NC}"
+    echo ""
+    exit 1
 else
     echo -e "${GREEN}✅ Services are running${NC}"
 fi
@@ -92,7 +93,7 @@ if curl -sf http://localhost:8080/health > /dev/null; then
     echo -e "${GREEN}✅ API Gateway is healthy${NC}"
 else
     echo -e "${RED}❌ API Gateway is not responding${NC}"
-    echo -e "${YELLOW}💡 Try: docker-compose -f docker-compose.test.yml logs api-gateway${NC}"
+    echo -e "${YELLOW}💡 Try: docker compose -f docker-compose.test.yml logs api-gateway${NC}"
     exit 1
 fi
 
@@ -168,7 +169,7 @@ else
     echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${YELLOW}💡 Tips:${NC}"
-    echo -e "  - Check logs: docker-compose -f docker-compose.test.yml logs"
+    echo -e "  - Check logs: docker compose -f docker-compose.test.yml logs"
     echo -e "  - Run with --verbose for more details"
     echo -e "  - Run specific suite: --suite e2e"
     exit 1

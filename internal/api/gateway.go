@@ -17,6 +17,7 @@ import (
 	"github.com/s3storage/internal/retry"
 	"github.com/s3storage/internal/storage"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -27,6 +28,8 @@ const (
 	ServerHeartbeatTimeout = 30 * time.Second
 	// StorageServerConnectTimeout is the timeout for connecting to storage servers
 	StorageServerConnectTimeout = 10 * time.Second
+	// ConnectionHealthCheckInterval is how often to check connection health
+	ConnectionHealthCheckInterval = 10 * time.Second
 )
 
 var (
@@ -46,16 +49,53 @@ type APIGateway struct {
 	RetryConfig     *retry.RetryConfig
 	clientsMu       sync.RWMutex
 	stopRefresh     chan struct{}
+	stopHealthCheck chan struct{}
 }
 
 // getStorageClient returns a gRPC client for a storage server
+// If connection is broken, attempts to reconnect
 func (gw *APIGateway) getStorageClient(serverID uuid.UUID) (pb.StorageServiceClient, error) {
 	gw.clientsMu.RLock()
 	conn, exists := gw.StorageClients[serverID]
 	gw.clientsMu.RUnlock()
 
 	if !exists {
+		log.Printf("Storage client not found for server %s", serverID)
 		return nil, ErrStorageServerNotFound
+	}
+
+	// Check connection state and reconnect if needed
+	state := conn.GetState()
+	if state == connectivity.TransientFailure || state == connectivity.Shutdown {
+		log.Printf("Connection to server %s is in state %v, attempting reconnect", serverID, state)
+
+		// Get server address from hash ring
+		servers := gw.HashRing.GetAllServers()
+		var serverAddr string
+		for _, s := range servers {
+			if s.ID == serverID.String() {
+				serverAddr = s.Address
+				break
+			}
+		}
+
+		if serverAddr == "" {
+			log.Printf("Server %s not found in hash ring (total servers: %d)", serverID, len(servers))
+			return nil, ErrStorageServerNotFound
+		}
+
+		// Attempt reconnection
+		if err := gw.reconnectToStorageServer(serverID, serverAddr); err != nil {
+			log.Printf("Failed to reconnect to server %s at %s: %v", serverID, serverAddr, err)
+			return nil, err
+		}
+
+		log.Printf("Successfully reconnected to server %s", serverID)
+
+		// Get new connection
+		gw.clientsMu.RLock()
+		conn = gw.StorageClients[serverID]
+		gw.clientsMu.RUnlock()
 	}
 
 	return pb.NewStorageServiceClient(conn), nil
@@ -122,6 +162,91 @@ func (gw *APIGateway) StopCleanupJob() {
 	}
 }
 
+// StartConnectionHealthCheck starts periodic health checks for storage server connections
+func (gw *APIGateway) StartConnectionHealthCheck(ctx context.Context) {
+	gw.stopHealthCheck = make(chan struct{})
+	ticker := time.NewTicker(ConnectionHealthCheckInterval)
+
+	go func() {
+		defer ticker.Stop()
+		log.Printf("Connection health check loop started (interval: %v)", ConnectionHealthCheckInterval)
+
+		for {
+			select {
+			case <-ticker.C:
+				gw.checkAndReconnectStorageServers(ctx)
+			case <-gw.stopHealthCheck:
+				log.Println("Connection health check loop stopped")
+				return
+			case <-ctx.Done():
+				log.Println("Connection health check loop stopped due to context cancellation")
+				return
+			}
+		}
+	}()
+}
+
+// StopConnectionHealthCheck stops the connection health check loop
+func (gw *APIGateway) StopConnectionHealthCheck() {
+	if gw.stopHealthCheck != nil {
+		close(gw.stopHealthCheck)
+	}
+}
+
+// checkAndReconnectStorageServers checks all storage server connections and reconnects if needed
+func (gw *APIGateway) checkAndReconnectStorageServers(ctx context.Context) {
+	gw.clientsMu.RLock()
+	serverIDs := make([]uuid.UUID, 0, len(gw.StorageClients))
+	for serverID := range gw.StorageClients {
+		serverIDs = append(serverIDs, serverID)
+	}
+	gw.clientsMu.RUnlock()
+
+	for _, serverID := range serverIDs {
+		gw.clientsMu.RLock()
+		conn, exists := gw.StorageClients[serverID]
+		gw.clientsMu.RUnlock()
+
+		if !exists {
+			continue
+		}
+
+		state := conn.GetState()
+
+		// Reconnect if connection is in bad state
+		if state == connectivity.TransientFailure || state == connectivity.Shutdown || state == connectivity.Idle {
+			log.Printf("Connection to server %s is in state %v, attempting reconnect", serverID, state)
+
+			// Get server address from hash ring
+			servers := gw.HashRing.GetAllServers()
+			var serverAddr string
+			for _, s := range servers {
+				if s.ID == serverID.String() {
+					serverAddr = s.Address
+					break
+				}
+			}
+
+			if serverAddr == "" {
+				log.Printf("Server %s not found in hash ring, skipping reconnect", serverID)
+				continue
+			}
+
+			// Attempt reconnection
+			if err := gw.reconnectToStorageServer(serverID, serverAddr); err != nil {
+				log.Printf("Failed to reconnect to server %s: %v", serverID, err)
+
+				// Reset circuit breaker on connection failure
+				if cb := gw.getCircuitBreaker(serverID); cb != nil {
+					cb.Reset()
+				}
+			} else {
+				log.Printf("Successfully reconnected to server %s", serverID)
+			}
+		}
+	}
+}
+
 // RefreshHashRing refreshes the hash ring with active storage servers from database
 func (gw *APIGateway) RefreshHashRing(ctx context.Context) error {
 	// Get active servers from database
@@ -181,13 +306,11 @@ func (gw *APIGateway) RefreshHashRing(ctx context.Context) error {
 }
 
 // connectToStorageServer creates a gRPC connection to a storage server
+// Connection is non-blocking - it will connect in background
 func (gw *APIGateway) connectToStorageServer(serverID uuid.UUID, address string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), StorageServerConnectTimeout)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, address,
+	// Create connection without blocking
+	conn, err := grpc.Dial(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(1024*1024*1024), // 1GB
 			grpc.MaxCallSendMsgSize(1024*1024*1024), // 1GB
@@ -201,7 +324,72 @@ func (gw *APIGateway) connectToStorageServer(serverID uuid.UUID, address string)
 	gw.StorageClients[serverID] = conn
 	gw.clientsMu.Unlock()
 
-	log.Printf("Connected to storage server: %s at %s", serverID, address)
+	log.Printf("Initiated connection to storage server: %s at %s", serverID, address)
+
+	// Check connection state in background
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), StorageServerConnectTimeout)
+		defer cancel()
+
+		// Wait for connection to be ready
+		if conn.WaitForStateChange(ctx, connectivity.Idle) {
+			state := conn.GetState()
+			if state == connectivity.Ready {
+				log.Printf("Successfully connected to storage server: %s at %s", serverID, address)
+			} else {
+				log.Printf("Connection to storage server %s is in state: %v", serverID, state)
+			}
+		}
+	}()
+
+	return nil
+}
+
+// reconnectToStorageServer attempts to reconnect to a storage server
+// Connection is non-blocking to avoid hanging on unavailable servers
+func (gw *APIGateway) reconnectToStorageServer(serverID uuid.UUID, address string) error {
+	// Close existing connection
+	gw.clientsMu.Lock()
+	if conn, exists := gw.StorageClients[serverID]; exists {
+		conn.Close()
+		delete(gw.StorageClients, serverID)
+	}
+	gw.clientsMu.Unlock()
+
+	// Create new connection without blocking
+	conn, err := grpc.Dial(address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(1024*1024*1024), // 1GB
+			grpc.MaxCallSendMsgSize(1024*1024*1024), // 1GB
+		),
+	)
+	if err != nil {
+		return err
+	}
+
+	gw.clientsMu.Lock()
+	gw.StorageClients[serverID] = conn
+	gw.clientsMu.Unlock()
+
+	log.Printf("Initiated reconnection to storage server: %s at %s", serverID, address)
+
+	// Check connection state in background
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), StorageServerConnectTimeout)
+		defer cancel()
+
+		// Wait for connection to be ready
+		if conn.WaitForStateChange(ctx, connectivity.Idle) {
+			state := conn.GetState()
+			if state == connectivity.Ready {
+				log.Printf("Successfully reconnected to storage server: %s at %s", serverID, address)
+			} else {
+				log.Printf("Reconnection to storage server %s is in state: %v", serverID, state)
+			}
+		}
+	}()
+
 	return nil
 }
 

@@ -16,29 +16,41 @@ This test suite includes:
 - Python 3.11+
 - Go 1.21+ (for building services)
 
+## Important: Infrastructure Setup
+
+**⚠️ Tests assume infrastructure is already running!**
+
+The integration tests no longer manage Docker Compose services automatically. You must start the infrastructure before running tests.
+
 ## Setup
 
-### 1. Install Python Dependencies
+### 1. Start Infrastructure
+
+**REQUIRED: Start services before running tests:**
+
+```bash
+# From project root
+docker compose -f docker-compose.test.yml up -d --build
+```
+
+Wait for services to be ready (~30 seconds). Verify with:
+
+```bash
+curl http://localhost:8080/health
+```
+
+### 2. Install Python Dependencies
 
 ```bash
 cd tests/integration
 pip install -r requirements.txt
 ```
 
-### 2. Generate gRPC Code
+### 3. Generate gRPC Code
 
 ```bash
 bash generate_grpc.sh
 ```
-
-### 3. Start Services
-
-```bash
-# From project root
-docker-compose -f docker-compose.test.yml up -d --build
-```
-
-Wait for services to be ready (~30 seconds).
 
 ## Running Tests
 
@@ -163,27 +175,64 @@ The test environment uses `docker-compose.test.yml` which includes:
 
 ### Services Not Ready
 
-If tests fail with connection errors:
+If tests fail with connection errors, ensure infrastructure is running:
 
 ```bash
+# Check if services are running
+docker compose -f docker-compose.test.yml ps
+
 # Check service health
 curl http://localhost:8080/health
 
 # View logs
-docker-compose -f docker-compose.test.yml logs
+docker compose -f docker-compose.test.yml logs
 
-# Restart services
-docker-compose -f docker-compose.test.yml restart
+# Restart services if needed
+docker compose -f docker-compose.test.yml restart
+```
+
+### Starting Infrastructure
+
+If you forgot to start infrastructure before running tests:
+
+```bash
+# Start all services
+docker compose -f docker-compose.test.yml up -d --build
+
+# Wait for services to be ready
+sleep 30
+
+# Verify API is accessible
+curl http://localhost:8080/health
 ```
 
 ### Cleanup
 
 ```bash
 # Stop and remove all containers
-docker-compose -f docker-compose.test.yml down -v
+docker compose -f docker-compose.test.yml down -v
 
 # Remove test data
 rm -rf tests/integration/test_data
+```
+
+### Database Connection Issues
+
+If tests fail with database connection errors:
+
+```bash
+# Check PostgreSQL is running
+docker compose -f docker-compose.test.yml ps postgres
+
+# Check database logs
+docker compose -f docker-compose.test.yml logs postgres
+
+# Set database connection environment variables if needed
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_NAME=s3_storage
+export DB_USER=postgres
+export DB_PASSWORD=postgres
 ```
 
 ### Disk Space

@@ -1,22 +1,22 @@
-# Архитектурные варианты системы распределенного хранения файлов
+# Architectural Variants of Distributed File Storage System
 
-## Введение
+## Introduction
 
-Данный документ описывает три архитектурных варианта системы распределенного хранения файлов (S3-подобный сервис) с использованием C4 Model (Context и Container уровни).
+This document describes three architectural variants of a distributed file storage system (S3-like service) using C4 Model (Context and Container levels).
 
-**Ключевые требования:**
-- REST API сервер для загрузки/скачивания файлов
-- Разделение файлов на 6 равных частей
-- Хранение на отдельных серверах (минимум 6)
-- Файлы до 10 GiB
-- Динамическое добавление storage серверов
-- Равномерное распределение нагрузки
-- Обработка прерванных загрузок
+**Key Requirements:**
+- REST API server for file upload/download
+- Split files into 6 equal parts
+- Storage on separate servers (minimum 6)
+- Files up to 10 GiB
+- Dynamic addition of storage servers
+- Uniform load distribution
+- Interrupted upload handling
 - Strong consistency, single-copy storage (MVP)
 
 ---
 
-## Вариант 1: Централизованная архитектура с PostgreSQL
+## Variant 1: Centralized Architecture with PostgreSQL
 
 ### C4 Level 1: System Context Diagram
 
@@ -31,7 +31,7 @@ graph TB
     style User fill:#08427b,stroke:#052e56,color:#ffffff
 ```
 
-**Описание:** Пользователь взаимодействует с системой хранения через REST API для загрузки и скачивания файлов.
+**Description:** User interacts with the storage system through REST API for uploading and downloading files.
 
 ### C4 Level 2: Container Diagram
 
@@ -72,48 +72,48 @@ graph TB
     style Storage6 fill:#ff6b6b,stroke:#c92a2a,color:#ffffff
 ```
 
-### Компоненты
+### Components
 
 1. **API Gateway Server (Go)**
    - REST API endpoints: `POST /files`, `GET /files/{id}`
-   - Chunking logic: разделение файла на 6 частей
-   - Координация загрузки/скачивания
-   - Управление метаданными через PostgreSQL
-   - Round-robin распределение chunks
+   - Chunking logic: splitting file into 6 parts
+   - Upload/download coordination
+   - Metadata management through PostgreSQL
+   - Round-robin chunk distribution
 
 2. **PostgreSQL Database**
-   - Хранение метаданных файлов
-   - Таблицы:
+   - File metadata storage
+   - Tables:
      - `files`: file_id, name, size, upload_status, created_at
      - `chunks`: chunk_id, file_id, chunk_number, storage_server_id, size
      - `storage_servers`: server_id, host, port, available_space, status
 
 3. **Storage Servers (Go)**
-   - HTTP/gRPC сервер для приема chunks
+   - HTTP/gRPC server for receiving chunks
    - Endpoints: `PUT /chunks/{id}`, `GET /chunks/{id}`, `DELETE /chunks/{id}`
-   - Локальное хранение на диске
+   - Local disk storage
    - Health check endpoint
 
-### Плюсы
+### Pros
 
-✅ **Простота реализации**: Централизованная логика в API Gateway  
-✅ **Надежность метаданных**: PostgreSQL обеспечивает ACID транзакции  
-✅ **Легкая отладка**: Все метаданные в одном месте  
-✅ **Консистентность**: Strong consistency из коробки  
-✅ **Масштабируемость storage**: Легко добавлять новые storage серверы  
-✅ **Rollback поддержка**: Можно откатить неудачные загрузки через транзакции  
+✅ **Implementation simplicity**: Centralized logic in API Gateway
+✅ **Metadata reliability**: PostgreSQL provides ACID transactions
+✅ **Easy debugging**: All metadata in one place
+✅ **Consistency**: Strong consistency out of the box
+✅ **Storage scalability**: Easy to add new storage servers
+✅ **Rollback support**: Can rollback failed uploads through transactions
 
-### Минусы
+### Cons
 
-❌ **Single Point of Failure**: PostgreSQL - узкое место  
-❌ **Масштабируемость API Gateway**: Один сервер обрабатывает все запросы  
-❌ **Производительность БД**: При большом количестве файлов могут быть проблемы  
-❌ **Сетевая нагрузка**: Все данные проходят через API Gateway  
-❌ **Latency**: Дополнительные запросы к БД на каждую операцию  
+❌ **Single Point of Failure**: PostgreSQL is a bottleneck
+❌ **API Gateway scalability**: Single server handles all requests
+❌ **DB performance**: May have issues with large number of files
+❌ **Network load**: All data passes through API Gateway
+❌ **Latency**: Additional DB queries on each operation
 
 ---
 
-## Вариант 2: Распределенная архитектура с Redis и Consistent Hashing
+## Variant 2: Distributed Architecture with Redis and Consistent Hashing
 
 ### C4 Level 1: System Context Diagram
 
@@ -167,48 +167,48 @@ graph TB
     style Storage6 fill:#ff6b6b,stroke:#c92a2a,color:#ffffff
 ```
 
-### Компоненты
+### Components
 
 1. **API Gateway Server (Go)**
-   - REST API с chunking logic
-   - **Consistent Hashing** для распределения chunks
-   - gRPC клиент для общения со storage
-   - Streaming upload/download для больших файлов
+   - REST API with chunking logic
+   - **Consistent Hashing** for chunk distribution
+   - gRPC client for storage communication
+   - Streaming upload/download for large files
 
 2. **Redis Cluster**
-   - In-memory кеш метаданных
-   - Persistence (AOF/RDB) для надежности
-   - Структуры данных:
+   - In-memory metadata cache
+   - Persistence (AOF/RDB) for reliability
+   - Data structures:
      - Hash: `file:{id}` → metadata
      - Set: `chunks:{file_id}` → chunk locations
      - Sorted Set: `servers` → server load balancing
 
 3. **Storage Servers (Go + gRPC)**
-   - gRPC сервер с streaming support
+   - gRPC server with streaming support
    - Methods: `PutChunk(stream)`, `GetChunk(stream)`, `DeleteChunk`
-   - Локальное хранение chunks
-   - Heartbeat в Redis для health monitoring
+   - Local chunk storage
+   - Heartbeat to Redis for health monitoring
 
-### Плюсы
+### Pros
 
-✅ **Высокая производительность**: Redis обеспечивает быстрый доступ к метаданным  
-✅ **Consistent Hashing**: Равномерное распределение и легкое добавление серверов  
-✅ **gRPC Streaming**: Эффективная передача больших файлов  
-✅ **Масштабируемость**: Redis Cluster может горизонтально масштабироваться  
-✅ **Низкая latency**: In-memory операции  
-✅ **Простое добавление серверов**: Consistent hashing минимизирует перераспределение  
+✅ **High performance**: Redis provides fast metadata access
+✅ **Consistent Hashing**: Uniform distribution and easy server addition
+✅ **gRPC Streaming**: Efficient large file transfer
+✅ **Scalability**: Redis Cluster can scale horizontally
+✅ **Low latency**: In-memory operations
+✅ **Simple server addition**: Consistent hashing minimizes redistribution
 
-### Минусы
+### Cons
 
-❌ **Сложность**: Consistent hashing требует тщательной реализации  
-❌ **Redis persistence**: Риск потери данных при сбое (даже с AOF)  
-❌ **Память**: Redis требует достаточно RAM для метаданных  
-❌ **Single API Gateway**: Все еще узкое место  
-❌ **Отладка**: Сложнее отследить распределение chunks  
+❌ **Complexity**: Consistent hashing requires careful implementation
+❌ **Redis persistence**: Risk of data loss on failure (even with AOF)
+❌ **Memory**: Redis requires sufficient RAM for metadata
+❌ **Single API Gateway**: Still a bottleneck
+❌ **Debugging**: Harder to track chunk distribution
 
 ---
 
-## Вариант 3: Микросервисная архитектура с Service Discovery
+## Variant 3: Microservices Architecture with Service Discovery
 
 ### C4 Level 1: System Context Diagram
 
@@ -288,156 +288,156 @@ graph TB
     style Storage6 fill:#ff6b6b,stroke:#c92a2a,color:#ffffff
 ```
 
-### Компоненты
+### Components
 
 1. **API Gateway (Go)**
-   - REST API фасад
-   - Маршрутизация запросов к микросервисам
-   - Аутентификация/авторизация
+   - REST API facade
+   - Request routing to microservices
+   - Authentication/authorization
 
 2. **Metadata Service (Go + PostgreSQL)**
-   - Управление метаданными файлов
-   - CRUD операции для файлов
-   - Транзакционная консистентность
+   - File metadata management
+   - CRUD operations for files
+   - Transactional consistency
 
 3. **Chunk Coordinator (Go)**
-   - Логика распределения chunks
-   - Выбор storage серверов через Consul
-   - Load balancing алгоритмы
-   - Мониторинг доступности серверов
+   - Chunk distribution logic
+   - Storage server selection through Consul
+   - Load balancing algorithms
+   - Server availability monitoring
 
 4. **Upload Manager (Go)**
-   - Управление процессом загрузки
-   - Обработка прерванных загрузок
+   - Upload process management
+   - Interrupted upload handling
    - Retry logic
-   - Cleanup неудачных загрузок
+   - Failed upload cleanup
 
 5. **Consul**
-   - Service Discovery для storage серверов
+   - Service Discovery for storage servers
    - Health checking
-   - Key-Value store для конфигурации
-   - Динамическая регистрация новых серверов
+   - Key-Value store for configuration
+   - Dynamic registration of new servers
 
 6. **Storage Servers (Go + gRPC)**
-   - Самостоятельная регистрация в Consul
-   - gRPC API для chunks
+   - Self-registration in Consul
+   - gRPC API for chunks
    - Health check endpoint
 
-### Плюсы
+### Pros
 
-✅ **Разделение ответственности**: Каждый сервис решает свою задачу  
-✅ **Масштабируемость**: Можно масштабировать каждый сервис независимо  
-✅ **Service Discovery**: Автоматическое обнаружение storage серверов  
-✅ **Отказоустойчивость**: Health checks и автоматическое исключение неработающих серверов  
-✅ **Гибкость**: Легко добавлять новые сервисы и функциональность  
-✅ **Мониторинг**: Consul предоставляет встроенный мониторинг  
-✅ **Независимое развертывание**: Сервисы можно обновлять отдельно  
+✅ **Separation of concerns**: Each service solves its own task
+✅ **Scalability**: Can scale each service independently
+✅ **Service Discovery**: Automatic storage server discovery
+✅ **Fault tolerance**: Health checks and automatic exclusion of failed servers
+✅ **Flexibility**: Easy to add new services and functionality
+✅ **Monitoring**: Consul provides built-in monitoring
+✅ **Independent deployment**: Services can be updated separately
 
-### Минусы
+### Cons
 
-❌ **Сложность**: Самая сложная архитектура из трех  
-❌ **Operational overhead**: Больше компонентов для управления  
-❌ **Network latency**: Больше сетевых вызовов между сервисами  
-❌ **Debugging**: Сложнее отслеживать запросы через несколько сервисов  
-❌ **Инфраструктура**: Требует больше ресурсов  
-❌ **Время разработки**: Дольше реализовывать  
+❌ **Complexity**: Most complex architecture of the three
+❌ **Operational overhead**: More components to manage
+❌ **Network latency**: More network calls between services
+❌ **Debugging**: Harder to track requests through multiple services
+❌ **Infrastructure**: Requires more resources
+❌ **Development time**: Takes longer to implement
 
 ---
 
-## Сравнительная таблица
+## Comparison Table
 
-| Критерий | Вариант 1: PostgreSQL | Вариант 2: Redis + CH | Вариант 3: Микросервисы |
+| Criterion | Variant 1: PostgreSQL | Variant 2: Redis + CH | Variant 3: Microservices |
 |----------|----------------------|----------------------|------------------------|
-| **Сложность реализации** | ⭐⭐ Низкая | ⭐⭐⭐ Средняя | ⭐⭐⭐⭐⭐ Высокая |
-| **Производительность** | ⭐⭐⭐ Средняя | ⭐⭐⭐⭐⭐ Высокая | ⭐⭐⭐⭐ Хорошая |
-| **Масштабируемость** | ⭐⭐⭐ Средняя | ⭐⭐⭐⭐ Хорошая | ⭐⭐⭐⭐⭐ Отличная |
-| **Надежность метаданных** | ⭐⭐⭐⭐⭐ Отличная | ⭐⭐⭐ Средняя | ⭐⭐⭐⭐⭐ Отличная |
-| **Отказоустойчивость** | ⭐⭐ Низкая | ⭐⭐⭐ Средняя | ⭐⭐⭐⭐⭐ Отличная |
-| **Operational сложность** | ⭐⭐ Низкая | ⭐⭐⭐ Средняя | ⭐⭐⭐⭐⭐ Высокая |
-| **Время разработки** | 2-3 недели | 3-4 недели | 5-6 недель |
-| **Подходит для MVP** | ✅ Да | ✅ Да | ❌ Нет |
-| **Production-ready** | ⚠️ С ограничениями | ✅ Да | ✅ Да |
+| **Implementation Complexity** | ⭐⭐ Low | ⭐⭐⭐ Medium | ⭐⭐⭐⭐⭐ High |
+| **Performance** | ⭐⭐⭐ Medium | ⭐⭐⭐⭐⭐ High | ⭐⭐⭐⭐ Good |
+| **Scalability** | ⭐⭐⭐ Medium | ⭐⭐⭐⭐ Good | ⭐⭐⭐⭐⭐ Excellent |
+| **Metadata Reliability** | ⭐⭐⭐⭐⭐ Excellent | ⭐⭐⭐ Medium | ⭐⭐⭐⭐⭐ Excellent |
+| **Fault Tolerance** | ⭐⭐ Low | ⭐⭐⭐ Medium | ⭐⭐⭐⭐⭐ Excellent |
+| **Operational Complexity** | ⭐⭐ Low | ⭐⭐⭐ Medium | ⭐⭐⭐⭐⭐ High |
+| **Development Time** | 2-3 weeks | 3-4 weeks | 5-6 weeks |
+| **Suitable for MVP** | ✅ Yes | ✅ Yes | ❌ No |
+| **Production-ready** | ⚠️ With limitations | ✅ Yes | ✅ Yes |
 
 ---
 
-## Рекомендации
+## Recommendations
 
-### Для MVP и быстрого старта
-**Рекомендуется: Вариант 1 (PostgreSQL)**
+### For MVP and Quick Start
+**Recommended: Variant 1 (PostgreSQL)**
 
-Причины:
-- Простая и понятная архитектура
-- Быстрая разработка
-- Надежное хранение метаданных
-- Легкая отладка
-- Соответствует требованию strong consistency
+Reasons:
+- Simple and clear architecture
+- Fast development
+- Reliable metadata storage
+- Easy debugging
+- Meets strong consistency requirement
 
-### Для production с высокой нагрузкой
-**Рекомендуется: Вариант 2 (Redis + Consistent Hashing)**
+### For Production with High Load
+**Recommended: Variant 2 (Redis + Consistent Hashing)**
 
-Причины:
-- Высокая производительность
-- Хорошая масштабируемость
-- Эффективное распределение нагрузки
-- Разумный баланс сложности и возможностей
+Reasons:
+- High performance
+- Good scalability
+- Efficient load distribution
+- Reasonable balance of complexity and capabilities
 
-### Для enterprise решения
-**Рекомендуется: Вариант 3 (Микросервисы)**
+### For Enterprise Solution
+**Recommended: Variant 3 (Microservices)**
 
-Причины:
-- Максимальная гибкость
-- Отличная масштабируемость
-- Высокая отказоустойчивость
-- Возможность независимого развития компонентов
+Reasons:
+- Maximum flexibility
+- Excellent scalability
+- High fault tolerance
+- Ability for independent component evolution
 
 ---
 
-## Общие технические решения для всех вариантов
+## Common Technical Solutions for All Variants
 
-### Протокол общения с Storage серверами
-**Рекомендация: gRPC с streaming**
+### Storage Server Communication Protocol
+**Recommendation: gRPC with streaming**
 
-Преимущества:
-- Бинарный протокол (эффективнее REST)
-- Streaming для больших файлов
-- Встроенная поддержка в Go
-- Type-safe контракты через protobuf
+Advantages:
+- Binary protocol (more efficient than REST)
+- Streaming for large files
+- Built-in support in Go
+- Type-safe contracts through protobuf
 
-### Обработка прерванных загрузок
-1. **Multipart upload**: Разделение на chunks с возможностью resume
-2. **Upload ID**: Уникальный идентификатор для каждой загрузки
-3. **Timeout механизм**: Автоматическая очистка незавершенных загрузок
-4. **Idempotency**: Возможность повторной отправки chunks
+### Interrupted Upload Handling
+1. **Multipart upload**: Split into chunks with resume capability
+2. **Upload ID**: Unique identifier for each upload
+3. **Timeout mechanism**: Automatic cleanup of incomplete uploads
+4. **Idempotency**: Ability to resend chunks
 
-### Равномерное распределение
-1. **Round-robin** (Вариант 1)
-2. **Consistent hashing** (Вариант 2)
-3. **Load-based selection** (Вариант 3)
+### Uniform Distribution
+1. **Round-robin** (Variant 1)
+2. **Consistent hashing** (Variant 2)
+3. **Load-based selection** (Variant 3)
 
-### Docker Compose структура
+### Docker Compose Structure
 ```yaml
 services:
   api-gateway:
-    # API сервер
+    # API server
   
   metadata-db:
-    # PostgreSQL или Redis
+    # PostgreSQL or Redis
   
   storage-1..N:
-    # Storage серверы
+    # Storage servers
   
-  consul: # только для варианта 3
+  consul: # only for variant 3
     # Service discovery
 ```
 
 ---
 
-## Следующие шаги
+## Next Steps
 
-1. Выбрать архитектурный вариант
-2. Детализировать API спецификацию
-3. Определить структуру данных
-4. Спроектировать схему БД/кеша
-5. Разработать protobuf схемы для gRPC
-6. Создать docker-compose конфигурацию
-7. Реализовать базовый прототип
+1. Choose architectural variant
+2. Detail API specification
+3. Define data structure
+4. Design DB/cache schema
+5. Develop protobuf schemas for gRPC
+6. Create docker-compose configuration
+7. Implement basic prototype

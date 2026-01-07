@@ -133,9 +133,14 @@ func (gw *APIGateway) UploadFile(c *gin.Context) {
 		serverID, err := gw.HashRing.GetServer(chunkID.String())
 		if err != nil {
 			gw.Storage.UpdateFileStatus(ctx, fileRecord.FileID, "failed")
+
+			// Get more details about available servers
+			allServers := gw.HashRing.GetAllServers()
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":   "no storage servers available",
-				"details": err.Error(),
+				"error":             "no storage servers available",
+				"details":           err.Error(),
+				"available_servers": len(allServers),
+				"chunk_number":      i,
 			})
 			return
 		}
@@ -150,14 +155,30 @@ func (gw *APIGateway) UploadFile(c *gin.Context) {
 			return
 		}
 
-		// Get storage client
-		client, err := gw.getStorageClient(serverUUID)
-		if err != nil {
+		// Get storage client with retry on connection failure
+		var client pb.StorageServiceClient
+		var clientErr error
+
+		// Try to get client, with one retry if connection is broken
+		for attempt := 0; attempt < 2; attempt++ {
+			client, clientErr = gw.getStorageClient(serverUUID)
+			if clientErr == nil {
+				break
+			}
+
+			if attempt == 0 {
+				// First attempt failed, wait a bit and try again
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+
+		if clientErr != nil {
 			gw.Storage.UpdateFileStatus(ctx, fileRecord.FileID, "failed")
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":     "failed to get storage client",
-				"server_id": serverID,
-				"details":   err.Error(),
+				"error":        "failed to get storage client",
+				"server_id":    serverID,
+				"chunk_number": i,
+				"details":      clientErr.Error(),
 			})
 			return
 		}

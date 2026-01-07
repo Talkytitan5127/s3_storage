@@ -80,6 +80,10 @@ func main() {
 	gateway.StartHashRingRefreshLoop(ctx)
 	log.Println("Hash ring refresh loop started")
 
+	// Start connection health check loop
+	gateway.StartConnectionHealthCheck(ctx)
+	log.Println("Connection health check loop started")
+
 	// Start cleanup job
 	gateway.StartCleanupJob(ctx)
 	log.Println("Cleanup job started")
@@ -107,6 +111,9 @@ func main() {
 
 	// Stop hash ring refresh loop
 	gateway.StopHashRingRefreshLoop()
+
+	// Stop connection health check loop
+	gateway.StopConnectionHealthCheck()
 
 	// Stop cleanup job
 	gateway.StopCleanupJob()
@@ -187,20 +194,17 @@ func initializeHashRing(ctx context.Context, gw *api.APIGateway, store *storage.
 }
 
 // connectToStorageServer creates a gRPC connection to a storage server
+// Connection is non-blocking to avoid startup delays
 func connectToStorageServer(address string) (*grpc.ClientConn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), storageServerTimeout)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, address,
+	conn, err := grpc.Dial(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(1024*1024*1024), // 1GB
 			grpc.MaxCallSendMsgSize(1024*1024*1024), // 1GB
 		),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to storage server: %w", err)
+		return nil, fmt.Errorf("failed to create connection to storage server: %w", err)
 	}
 
 	return conn, nil
